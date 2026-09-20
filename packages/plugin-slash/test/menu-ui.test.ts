@@ -799,6 +799,71 @@ describe("createSlashMenuUI drag reordering", () => {
     expect(h.menu.element.querySelectorAll(".is-dragging")).toHaveLength(0);
   });
 
+  it("inverts the rows that changed slot so they can slide", () => {
+    h = setup(baseCommands, withReorder(true));
+    open(h.editor, "");
+    stubRowRects(h.menu);
+
+    pressHandle(h.menu, "bold", dropY(2));
+    movePointer(dropY(0));
+
+    // Moved rows are offset back to their old position first; the transition
+    // that releases them is applied on the next frame.
+    expect(itemById(h.menu, "h1").style.transform).toContain("translateY");
+    expect(itemById(h.menu, "h2").style.transform).toContain("translateY");
+    // The held row follows the pointer rather than sliding into a slot.
+    expect(itemById(h.menu, "bold").style.transition).toBe("");
+
+    releasePointer(dropY(0));
+  });
+
+  it("clears every inline animation style when the gesture ends", () => {
+    h = setup(baseCommands, withReorder(true));
+    open(h.editor, "");
+    stubRowRects(h.menu);
+
+    pressHandle(h.menu, "bold", dropY(2));
+    movePointer(dropY(0));
+    releasePointer(dropY(0));
+
+    for (const command of baseCommands) {
+      const el = itemById(h.menu, command.id);
+      expect(el.style.transform).toBe("");
+      expect(el.style.transition).toBe("");
+    }
+  });
+
+  it("skips the slide when the user prefers reduced motion", () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("prefers-reduced-motion"),
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+
+    try {
+      h = setup(baseCommands, withReorder(true));
+      open(h.editor, "");
+      stubRowRects(h.menu);
+
+      pressHandle(h.menu, "bold", dropY(2));
+      movePointer(dropY(0));
+
+      expect(itemIds(h.menu)).toEqual(["bold", "h1", "h2"]);
+      expect(itemById(h.menu, "h1").style.transform).toBe("");
+      expect(itemById(h.menu, "h1").style.transition).toBe("");
+
+      releasePointer(dropY(0));
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
   it("confirms the dropped command with Enter", () => {
     const h1Run = vi.fn();
     const h2Run = vi.fn();

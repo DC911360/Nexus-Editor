@@ -105,6 +105,10 @@ const VIEWPORT_MARGIN = 8;
 // threshold, a plain click on the handle would nudge the row by a fraction
 // of its height and reorder on release.
 const DRAG_THRESHOLD_PX = 4;
+// Rows slide to their new slot instead of jumping. Short enough to feel like
+// direct manipulation rather than an animation the user waits on.
+const REORDER_DURATION_MS = 140;
+const REORDER_EASING = "cubic-bezier(0.2, 0, 0, 1)";
 
 let uniqueIdCounter = 0;
 function generateId(prefix: string): string {
@@ -192,11 +196,15 @@ export function createSlashMenuUI(
   // a cancelled drag can be rewound; `currentIndex` tracks the row under the
   // pointer so `enter`/click handlers can keep highlighting the right element.
   let drag: {
+    el: HTMLDivElement;
     fromIndex: number;
     currentIndex: number;
     startY: number;
     moved: boolean;
   } | null = null;
+  // Frames scheduled by the slide animation, cancelled when the gesture ends
+  // so a stale callback cannot repaint a row after cleanup.
+  let flipFrames: number[] = [];
 
   // ── Helpers ─────────────────────────────────────────────────────
   function isMenuOpen(): boolean {
@@ -326,6 +334,80 @@ export function createSlashMenuUI(
   }
 
   // ── Drag reordering ─────────────────────────────────────────────
+  function prefersReducedMotion(): boolean {
+    // Optional chaining because JSDOM and older embedded webviews do not
+    // implement matchMedia; a missing API must mean "animate normally",
+    // not "throw during a drag".
+    return ownerWindow?.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+  }
+
+  /** Row geometry keyed by element, so a reorder cannot invalidate the lookup. */
+  function measureRows(): Map<HTMLElement, number> {
+    const tops = new Map<HTMLElement, number>();
+    for (const el of itemEls) tops.set(el, el.getBoundingClientRect().top);
+    return tops;
+  }
+
+  /**
+   * FLIP slide for the rows that changed slot.
+   *
+   * Rows live in normal flow, so a reorder changes their layout position and a
+   * CSS transition has nothing to interpolate. The transform is what gives the
+   * move something to animate: invert to the old position first, then release
+   * it on the next frame so the browser eases each row into its real slot.
+   */
+  function playRowSlide(before: Map<HTMLElement, number>): void {
+    if (prefersReducedMotion()) return;
+
+    const sliding: Array<{ el: HTMLDivElement; delta: number }> = [];
+    for (const el of itemEls) {
+      // The dragged row tracks the pointer instead; sliding it would fight
+      // the offset applied in `followPointer`.
+      if (el === drag?.el) continue;
+      const previousTop = before.get(el);
+      if (previousTop === undefined) continue;
+      const delta = previousTop - el.getBoundingClientRect().top;
+      if (delta === 0) continue;
+      sliding.push({ el, delta });
+    }
+    if (sliding.length === 0) return;
+
+    for (const { el, delta } of sliding) {
+      el.style.transition = "none";
+      el.style.transform = `translateY(${delta}px)`;
+    }
+
+    const frame = ownerWindow?.requestAnimationFrame(() => {
+      for (const { el } of sliding) {
+        el.style.transition = `transform ${REORDER_DURATION_MS}ms ${REORDER_EASING}`;
+        el.style.transform = "";
+      }
+    });
+    if (frame !== undefined) flipFrames.push(frame);
+  }
+
+  /** Keeps the held row under the pointer while the list reflows around it. */
+  function followPointer(clientY: number): void {
+    const el = drag?.el;
+    if (!el) return;
+    // Measure with the transform cleared: getBoundingClientRect reports the
+    // transformed box, so reading it while offset would make the offset chase
+    // itself and collapse to zero.
+    el.style.transform = "";
+    const rect = el.getBoundingClientRect();
+    el.style.transform = `translateY(${clientY - (rect.top + rect.height / 2)}px)`;
+  }
+
+  /** Drops every inline style the gesture applied, so hosts keep control. */
+  function clearRowStyles(): void {
+    for (const frame of flipFrames) ownerWindow?.cancelAnimationFrame(frame);
+    flipFrames = [];
+    for (const el of itemEls) {
+      el.style.transition = "";
+      el.style.transform = "";
+    }
+  }
+
   /**
    * Moves the command at `from` to `to` across `itemEls`, `visibleCommands`,
    * and the DOM, keeping the three in lockstep. Returns the resulting index
@@ -337,6 +419,7 @@ export function createSlashMenuUI(
     const target = Math.max(0, Math.min(to, count - 1));
     if (target === from) return from;
 
+    const before = measureRows();
     const [item] = itemEls.splice(from, 1);
     itemEls.splice(target, 0, item);
     const [command] = visibleCommands.splice(from, 1);
@@ -344,6 +427,7 @@ export function createSlashMenuUI(
 
     // Re-seat every row in array order; appendChild moves an existing node.
     for (const el of itemEls) root.appendChild(el);
+    playRowSlide(before);
     return target;
   }
 
@@ -375,6 +459,7 @@ export function createSlashMenuUI(
     event.stopPropagation();
 
     drag = {
+      el: item,
       fromIndex: index,
       currentIndex: index,
       startY: event.clientY,
@@ -392,14 +477,23 @@ export function createSlashMenuUI(
     if (!drag.moved) {
       if (Math.abs(event.clientY - drag.startY) < DRAG_THRESHOLD_PX) return;
       drag.moved = true;
-      itemEls[drag.currentIndex]?.classList.add("is-dragging");
+      drag.el.classList.add("is-dragging");
+      // Draw the held row above its neighbours; it is offset out of its own
+      // slot for the rest of the gesture.
+      drag.el.style.zIndex = "1";
+      drag.el.style.cursor = "grabbing";
     }
+    // Resolve the drop target from layout, not from the held row's painted
+    // box: `getBoundingClientRect` reports the transform, so leaving the
+    // pointer offset in place would skew the row's own midpoint.
+    drag.el.style.transform = "";
     const next = moveVisibleCommand(drag.currentIndex, resolveDropIndex(event.clientY));
     drag.currentIndex = next;
     // The dragged row is the active row: confirmation must follow what the
     // user sees under their pointer, not the pre-drag index.
     highlight = next;
     applyHighlight();
+    followPointer(event.clientY);
     event.preventDefault();
   }
 
@@ -415,10 +509,11 @@ export function createSlashMenuUI(
 
   function endDrag(): void {
     if (!drag) return;
-    itemEls[drag.currentIndex]?.classList.remove("is-dragging");
+    drag.el.classList.remove("is-dragging");
     ownerDocument.removeEventListener("mousemove", onDragMove, true);
     ownerDocument.removeEventListener("mouseup", onDragEnd, true);
     drag = null;
+    clearRowStyles();
   }
 
   /** Abandons an in-flight drag without persisting, restoring the pre-drag order. */
