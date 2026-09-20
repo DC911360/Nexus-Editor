@@ -42,9 +42,19 @@ export function iconRedo(): HTMLElement {
 }
 
 export function iconLink(): HTMLElement {
+  // Two interlocking hooks on a diagonal chain. Drawn upright and rotated so
+  // the geometry stays readable: each hook is a straight run into a
+  // half-circle cap and a straight run back, and the two hooks stop short of
+  // each other on opposite edges — that offset pair of gaps is what reads as
+  // "linked" rather than as one outlined capsule.
+  // Gaps are sized against the 1.8 stroke: a round cap adds 0.9 past each end,
+  // so a 3.0 separation is what leaves a ~1.2 gap on screen. Tighter than that
+  // and the two hooks merge into one outlined capsule.
   return svgIcon(
-    `<path d="M10 6H7a3 3 0 0 0 0 6h1"/>` +
-    `<path d="M8 12h4a3 3 0 0 0 0-6h-1"/>`
+    `<g transform="rotate(-45 9 9)">` +
+      `<path d="M10.2 6.5H11.5a2.5 2.5 0 0 1 0 5H10.8"/>` +
+      `<path d="M7.8 11.5H6.5a2.5 2.5 0 0 1 0-5H7.2"/>` +
+      `</g>`
   );
 }
 
