@@ -89,6 +89,16 @@ function installToolbarTooltip(button: HTMLButtonElement): () => void {
   tooltip.className = "nexus-toolbar-tooltip";
   tooltip.id = `nexus-toolbar-tooltip-${++tooltipId}`;
   tooltip.setAttribute("role", "tooltip");
+  // The tooltip is placed from viewport coordinates (see
+  // `positionToolbarTooltip`), so it has to be positioned. Without this the
+  // `left` / `top` written there are inert and the element falls back into
+  // normal flow at the end of the document, where it is effectively invisible.
+  // Only the functional geometry lives here; colours and typography belong to
+  // the host.
+  tooltip.style.position = "fixed";
+  // `left` anchors the button's horizontal centre, so the box is pulled back by
+  // half its own width to sit centred underneath.
+  tooltip.style.transform = "translateX(-50%)";
   button.setAttribute("aria-describedby", tooltip.id);
 
   const show = () => {
