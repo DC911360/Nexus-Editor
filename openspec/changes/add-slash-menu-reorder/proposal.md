@@ -22,6 +22,7 @@ This change adds the missing runtime affordance: a drag handle on each item that
 - Merge persisted order with the visible window: because the editor caps slash menu results at `slashMenuLimit` (default 8) *before* the menu renders, a drop rewrites only the ids it can see and preserves the relative order of every previously stored id outside that window. A drag MUST NOT drop commands it cannot see.
 - Ignore unknown, stale, or duplicated command ids in storage without breaking menu open, render, navigation, or confirmation.
 - Keep disabled/default behavior fully backward compatible: registration/recency order, keyboard navigation, Enter confirm, click confirm, and the existing `history` option are unchanged.
+- Enable the option in `apps/electron-demo` so the demo keeps doing its job of demonstrating engine capabilities. The library default stays off; the demo opts in explicitly.
 
 ## Non-Goals
 
@@ -30,7 +31,8 @@ This change adds the missing runtime affordance: a drag handle on each item that
 - No drag *between* the visible window and the capped-out remainder (the UI cannot observe commands beyond `slashMenuLimit`).
 - No changes to slash command ranking, filtering, or the `slashMenuLimit` cap.
 - No cross-command ordering for non-visible commands, and no drag on non-empty queries.
-- No changes to `packages/core/**`, `packages/plugin-search/**`, or `apps/electron-demo/**`.
+- No changes to `packages/core/**` or `packages/plugin-search/**`.
+- No change to the library default: the demo opts in, the package does not.
 - No new dependencies.
 
 ## Impact
@@ -41,7 +43,8 @@ This change adds the missing runtime affordance: a drag handle on each item that
   - `packages/plugin-slash/src/command-order.ts` (new module, mirrors `command-history.ts`)
   - `packages/plugin-slash/src/index.ts` for the public type/export surface
   - `packages/plugin-slash/test/menu-ui.test.ts`
+  - `apps/electron-demo/src/renderer/editor-shell.ts` (opt in)
+  - `apps/electron-demo/src/renderer/style.css` (host styling for the handle)
 - Explicitly out of scope:
   - `packages/core/**`
   - `packages/plugin-search/**`
-  - `apps/electron-demo/**`

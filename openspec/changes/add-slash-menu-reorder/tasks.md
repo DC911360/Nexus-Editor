@@ -28,9 +28,18 @@
 - [x] 3.9 Suppress navigation keys during a drag and cancel on `Escape`, hide, dismiss, and destroy.
 - [x] 3.10 Freeze rendering while a drag is in flight; cancel the gesture when incoming state no longer matches the rendered list.
 - [x] 3.11 Expose the new public types and `DEFAULT_SLASH_COMMAND_ORDER_KEY` from `packages/plugin-slash/src/index.ts`.
-- [x] 3.12 Keep `packages/core/**`, `packages/plugin-search/**`, and `apps/electron-demo/**` unchanged.
+- [x] 3.12 Keep `packages/core/**` and `packages/plugin-search/**` unchanged.
+- [x] 3.13 Enable the option in the Electron demo and style the handle there, without changing the library default.
 
-## 4. Phase 4 - Verification
+## 4. Phase 4 - Reorder Animation
+
+- [x] 4.1 Slide rows that changed slot into place with FLIP instead of letting them jump.
+- [x] 4.2 Follow the pointer with the held row rather than sliding it into a slot.
+- [x] 4.3 Skip the slide when the user prefers reduced motion.
+- [x] 4.4 Clear every inline style the gesture applies when it ends, so hosts keep control of the look.
+- [x] 4.5 Measure drop candidates with the held row's transform cleared: `getBoundingClientRect` reports the transformed box, so the pointer offset otherwise skewed the row's own midpoint and resolved the target one slot late.
+
+## 5. Phase 5 - Verification
 
 - [x] 4.1 Run the targeted `plugin-slash` menu UI tests and confirm the new red tests pass.
 - [x] 4.2 Run `pnpm test` (68 files, 928 tests) and confirm no regressions.
