@@ -5,11 +5,18 @@ import {
   type SlashCommandHistoryOptions,
   type SlashCommandHistoryStorage,
 } from "./command-history";
+import {
+  createSlashCommandOrder,
+  type SlashCommandOrderConfig,
+  type SlashCommandOrderOptions,
+} from "./command-order";
 
 export type {
   SlashCommandHistoryConfig,
   SlashCommandHistoryOptions,
   SlashCommandHistoryStorage,
+  SlashCommandOrderConfig,
+  SlashCommandOrderOptions,
 };
 
 export interface SlashMenuCommandContext {
@@ -46,6 +53,8 @@ export interface SlashMenuUIOptions {
    * Generated selectors:
    *   `.{prefix}-menu`, `.{prefix}-menu__item`,
    *   `.{prefix}-menu__item.is-active`,
+   *   `.{prefix}-menu__item.is-dragging`,
+   *   `.{prefix}-menu__handle`,
    *   `.{prefix}-menu__title`, `.{prefix}-menu__description`,
    *   `.{prefix}-menu__empty`.
    */
@@ -60,6 +69,16 @@ export interface SlashMenuUIOptions {
    * history; an options object may provide host-injected storage.
    */
   history?: SlashCommandHistoryConfig;
+  /**
+   * Opt-in manual reordering. `true` enables a session-only drag handle on
+   * every item; an options object may provide host-injected storage so the
+   * arrangement survives restarts.
+   *
+   * Manual placement is applied after `history`, so pinned commands win over
+   * recency ordering. It only affects empty-query menus — while a query
+   * filters the list there is nothing stable to reorder.
+   */
+  reorderable?: SlashCommandOrderConfig;
   /**
    * Register the legacy document-level key listener. Runtime hosts set this to
    * false and route keys through the EditorHost root dispatcher instead.
@@ -82,11 +101,45 @@ export interface SlashMenuUI {
 const DEFAULT_PREFIX = "nexus-slash";
 const DEFAULT_OFFSET = 4;
 const VIEWPORT_MARGIN = 8;
+// Pointer travel (px) before a handle press becomes a reorder. Without a
+// threshold, a plain click on the handle would nudge the row by a fraction
+// of its height and reorder on release.
+const DRAG_THRESHOLD_PX = 4;
 
 let uniqueIdCounter = 0;
 function generateId(prefix: string): string {
   uniqueIdCounter += 1;
   return `${prefix}-menu-${uniqueIdCounter}`;
+}
+
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+const GRIP_DOTS: ReadonlyArray<readonly [number, number]> = [
+  [2, 3],
+  [8, 3],
+  [2, 8],
+  [8, 8],
+  [2, 13],
+  [8, 13],
+];
+
+/**
+ * Six-dot grip glyph. Sized inline because the package ships no stylesheet:
+ * an unsized handle would render nothing and leave the drag with no hit area.
+ */
+function createGripIcon(ownerDocument: Document): SVGSVGElement {
+  const icon = ownerDocument.createElementNS(SVG_NAMESPACE, "svg");
+  icon.setAttribute("viewBox", "0 0 10 16");
+  icon.setAttribute("width", "10");
+  icon.setAttribute("height", "16");
+  icon.setAttribute("fill", "currentColor");
+  for (const [cx, cy] of GRIP_DOTS) {
+    const dot = ownerDocument.createElementNS(SVG_NAMESPACE, "circle");
+    dot.setAttribute("cx", String(cx));
+    dot.setAttribute("cy", String(cy));
+    dot.setAttribute("r", "1.4");
+    icon.appendChild(dot);
+  }
+  return icon;
 }
 
 export function createSlashMenuUI(
@@ -101,6 +154,7 @@ export function createSlashMenuUI(
   if (!ownerWindow) throw new TypeError("Slash menu container must belong to a window");
   const menuId = generateId(prefix);
   const commandHistory = createSlashCommandHistory(options.history);
+  const commandOrder = createSlashCommandOrder(options.reorderable);
 
   // ── DOM scaffolding ──────────────────────────────────────────────
   const root = ownerDocument.createElement("div");
@@ -133,6 +187,16 @@ export function createSlashMenuUI(
   let dismissed = false;
   let prevIsOpen = false;
   let destroyed = false;
+
+  // Active reorder gesture. `fromIndex` is captured when the press starts so
+  // a cancelled drag can be rewound; `currentIndex` tracks the row under the
+  // pointer so `enter`/click handlers can keep highlighting the right element.
+  let drag: {
+    fromIndex: number;
+    currentIndex: number;
+    startY: number;
+    moved: boolean;
+  } | null = null;
 
   // ── Helpers ─────────────────────────────────────────────────────
   function isMenuOpen(): boolean {
@@ -180,10 +244,35 @@ export function createSlashMenuUI(
       item.appendChild(title);
       item.appendChild(desc);
 
-      const index = itemEls.length;
-      // Hover sync: keyboard and mouse share the same highlight model.
+      if (commandOrder) {
+        const handle = ownerDocument.createElement("div");
+        handle.className = `${prefix}-menu__handle`;
+        // Pointer-only affordance. Exposing a control keyboard users cannot
+        // operate would be worse than hiding it, and an interactive child
+        // inside role="option" is invalid ARIA.
+        handle.setAttribute("aria-hidden", "true");
+        // The package ships no stylesheet, so the grip is sized here: an
+        // unsized element would leave the gesture with no hit area. Colours
+        // stay on `currentColor` and the rest of the look belongs to the host.
+        handle.style.cursor = "grab";
+        handle.appendChild(createGripIcon(ownerDocument));
+        // A press on the handle must not reach the item's click handler, or
+        // releasing the handle would confirm the command.
+        handle.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+        handle.addEventListener("mousedown", (e) => onHandleMouseDown(e, item));
+        item.insertBefore(handle, title);
+      }
+
+      // Resolve the index at event time instead of capturing it. A reorder
+      // moves the element to a new position, so an index captured at creation
+      // would point at whichever command now occupies the old slot.
       item.addEventListener("mouseenter", () => {
-        if (!isMenuOpen()) return;
+        if (!isMenuOpen() || drag) return;
+        const index = itemEls.indexOf(item);
+        if (index < 0) return;
         highlight = index;
         applyHighlight();
       });
@@ -194,6 +283,9 @@ export function createSlashMenuUI(
       });
       item.addEventListener("click", (e) => {
         e.preventDefault();
+        if (drag) return;
+        const index = itemEls.indexOf(item);
+        if (index < 0) return;
         highlight = index;
         confirm();
       });
@@ -217,7 +309,11 @@ export function createSlashMenuUI(
       const cmd = commands[i];
       const item = itemEls[i];
       item.dataset.slashCommandId = cmd.id;
-      const [titleEl, descEl] = item.children as unknown as HTMLDivElement[];
+      // Look the parts up by class: when a drag handle is present the item has
+      // three children, so positional destructuring would pick the wrong node.
+      const titleEl = item.querySelector<HTMLDivElement>(`.${prefix}-menu__title`);
+      const descEl = item.querySelector<HTMLDivElement>(`.${prefix}-menu__description`);
+      if (!titleEl || !descEl) continue;
       titleEl.textContent = cmd.title;
       if (cmd.description) {
         descEl.textContent = cmd.description;
@@ -227,6 +323,112 @@ export function createSlashMenuUI(
         descEl.style.display = "none";
       }
     }
+  }
+
+  // ── Drag reordering ─────────────────────────────────────────────
+  /**
+   * Moves the command at `from` to `to` across `itemEls`, `visibleCommands`,
+   * and the DOM, keeping the three in lockstep. Returns the resulting index
+   * (clamped to the list bounds so a drag cannot escape the rendered rows).
+   */
+  function moveVisibleCommand(from: number, to: number): number {
+    const count = itemEls.length;
+    if (count < 2) return from;
+    const target = Math.max(0, Math.min(to, count - 1));
+    if (target === from) return from;
+
+    const [item] = itemEls.splice(from, 1);
+    itemEls.splice(target, 0, item);
+    const [command] = visibleCommands.splice(from, 1);
+    visibleCommands.splice(target, 0, command);
+
+    // Re-seat every row in array order; appendChild moves an existing node.
+    for (const el of itemEls) root.appendChild(el);
+    return target;
+  }
+
+  /** Index of the row the pointer is currently over, using row midpoints. */
+  function resolveDropIndex(clientY: number): number {
+    const count = itemEls.length;
+    if (count === 0) return 0;
+    for (let i = 0; i < count; i++) {
+      const rect = itemEls[i].getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) return i;
+    }
+    return count - 1;
+  }
+
+  function onHandleMouseDown(event: MouseEvent, item: HTMLDivElement): void {
+    if (!commandOrder || destroyed || drag) return;
+    if (event.button !== 0) return;
+    // A filtered list has no stable order to rearrange, and a menu that is
+    // not open has nothing to rearrange at all.
+    if (!isMenuOpen() || currentState?.query !== "") return;
+    if (itemEls.length < 2) return;
+
+    const index = itemEls.indexOf(item);
+    if (index < 0) return;
+
+    // Keep the text selection and the editor focus where they were, and stop
+    // the item's own mousedown handler from treating this as a row press.
+    event.preventDefault();
+    event.stopPropagation();
+
+    drag = {
+      fromIndex: index,
+      currentIndex: index,
+      startY: event.clientY,
+      moved: false,
+    };
+
+    // Capture phase on the document so the gesture survives the pointer
+    // leaving the menu — a drop outside the element still commits.
+    ownerDocument.addEventListener("mousemove", onDragMove, true);
+    ownerDocument.addEventListener("mouseup", onDragEnd, true);
+  }
+
+  function onDragMove(event: MouseEvent): void {
+    if (!drag) return;
+    if (!drag.moved) {
+      if (Math.abs(event.clientY - drag.startY) < DRAG_THRESHOLD_PX) return;
+      drag.moved = true;
+      itemEls[drag.currentIndex]?.classList.add("is-dragging");
+    }
+    const next = moveVisibleCommand(drag.currentIndex, resolveDropIndex(event.clientY));
+    drag.currentIndex = next;
+    // The dragged row is the active row: confirmation must follow what the
+    // user sees under their pointer, not the pre-drag index.
+    highlight = next;
+    applyHighlight();
+    event.preventDefault();
+  }
+
+  function onDragEnd(_event: MouseEvent): void {
+    if (!drag) return;
+    const { moved, currentIndex } = drag;
+    endDrag();
+    if (!moved || !commandOrder) return;
+    commandOrder.commit(visibleCommands.map((command) => command.id));
+    highlight = currentIndex;
+    applyHighlight();
+  }
+
+  function endDrag(): void {
+    if (!drag) return;
+    itemEls[drag.currentIndex]?.classList.remove("is-dragging");
+    ownerDocument.removeEventListener("mousemove", onDragMove, true);
+    ownerDocument.removeEventListener("mouseup", onDragEnd, true);
+    drag = null;
+  }
+
+  /** Abandons an in-flight drag without persisting, restoring the pre-drag order. */
+  function cancelDrag(): void {
+    if (!drag) return;
+    const { fromIndex, currentIndex } = drag;
+    endDrag();
+    const restored = moveVisibleCommand(currentIndex, fromIndex);
+    highlight = restored;
+    applyHighlight();
   }
 
   function reposition(): void {
@@ -269,15 +471,25 @@ export function createSlashMenuUI(
 
   function show(): void {
     if (!currentState) return;
-    visibleCommands = commandHistory
+    // A drag owns the rendered order until it ends. Re-rendering underneath
+    // the pointer would rebuild the rows the gesture is tracking, so the
+    // list is frozen while `drag` is set.
+    if (drag) return;
+    // Recency first, then manual placement on top: a command the user has
+    // pinned outranks one that merely happens to be recent.
+    const base = commandHistory
       ? commandHistory.reorder(currentState.commands, currentState.query)
       : currentState.commands;
+    visibleCommands = commandOrder ? commandOrder.apply(base) : base;
     renderItems(visibleCommands);
     applyHighlight();
     reposition();
   }
 
   function hide(): void {
+    // An in-flight drag is abandoned rather than committed: hiding the menu
+    // is not a drop.
+    cancelDrag();
     root.style.display = "none";
   }
 
@@ -350,6 +562,18 @@ export function createSlashMenuUI(
       return;
     }
 
+    if (drag) {
+      // A drag is in flight. When the incoming state still describes the same
+      // unfiltered list, keep the gesture alive — `currentState` above already
+      // refreshed the trigger range that `confirm()` reads. Anything else
+      // invalidates the rows under the pointer, so the drag is abandoned
+      // rather than continued against a list it no longer matches.
+      if (state.query === "" && state.commands.length === visibleCommands.length) {
+        return;
+      }
+      cancelDrag();
+    }
+
     // Clamp highlight if the command list shrank below it.
     if (highlight >= state.commands.length) {
       highlight = Math.max(0, state.commands.length - 1);
@@ -368,6 +592,15 @@ export function createSlashMenuUI(
 
   function onKeyDown(e: KeyboardEvent): boolean {
     if (destroyed || !isMenuOpen() || isComposing) return false;
+
+    if (drag && e.key !== "Escape") {
+      // The drag owns the highlight for the duration of the gesture. Letting
+      // navigation keys through would leave the active row pointing somewhere
+      // other than the row under the pointer. Escape still cancels below.
+      e.preventDefault();
+      e.stopPropagation();
+      return true;
+    }
 
     const len = visibleCommands.length;
 
@@ -480,6 +713,9 @@ export function createSlashMenuUI(
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      // Detach document-level drag listeners before the element is removed;
+      // otherwise a gesture started before destroy would keep listening.
+      endDrag();
       editor.off("slashMenuChange", onSlashMenuChange);
       editor.off("blur", onEditorBlur);
       if (options.manageKeyboard !== false) {
