@@ -343,3 +343,16 @@ body,
   color: var(--nexus-accent, #2563eb);
   font-weight: 500;
 }
+
+/* Demo styling for the opt-in slash drag handle (host owns the look). */
+.nexus-slash-menu__item { position: relative; padding-left: 26px; }
+.nexus-slash-menu__handle {
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  color: var(--nexus-slash-text-muted);
+}
+.nexus-slash-menu__item.is-dragging { opacity: 0.45; }
