@@ -494,6 +494,33 @@ describe("createToolbarUI", () => {
     toolbar.destroy();
     editor.destroy();
   });
+
+  it("places the tooltip from viewport coordinates", () => {
+    // Regression: the tooltip is anchored with `left` / `top`, which are inert
+    // unless the element is positioned. Without this it rendered in normal flow
+    // at the end of the document instead of under its button.
+    const container = document.createElement("div");
+    const editor = createEditor({ container, initialValue: "hello world" });
+    const toolbar = createToolbarUI(editor);
+    document.body.appendChild(toolbar.element);
+
+    const button = toolbar.element.querySelector<HTMLButtonElement>(
+      '[data-toolbar-action="unordered-list"]'
+    );
+    button?.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+
+    const tooltip = document.getElementById(button?.getAttribute("aria-describedby") ?? "");
+    expect(tooltip).not.toBeNull();
+    expect(tooltip?.style.position).toBe("fixed");
+    // `left` is the button's centre, so the box has to be pulled back by half
+    // its own width to sit centred underneath.
+    expect(tooltip?.style.transform).toBe("translateX(-50%)");
+    expect(tooltip?.style.left).toMatch(/px$/);
+    expect(tooltip?.style.top).toMatch(/px$/);
+
+    toolbar.destroy();
+    editor.destroy();
+  });
 });
 
 describe("toggleUnorderedList — atomic undo", () => {
