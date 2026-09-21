@@ -919,13 +919,13 @@ export class EditableTableWidget extends WidgetType {
       return "| " + vals.join(" | ") + " |";
     };
 
-    function dirtySourceSnapshot(): {
+    function dirtySourceSnapshot(baseSource: string): {
       source: string;
       changed: boolean;
       firstChangedLineIdx: number | null;
       firstChangedRow: HTMLElement | null;
     } {
-      const nextSourceLines = sourceLines.slice();
+      const nextSourceLines = baseSource.split("\n");
       let changed = false;
       let firstChangedLineIdx: number | null = null;
       let firstChangedRow: HTMLElement | null = null;
@@ -962,7 +962,10 @@ export class EditableTableWidget extends WidgetType {
         clearDirtyRows();
         return { source: self.source, changed: false, valid: false };
       }
-      const snapshot = dirtySourceSnapshot();
+      // The drag path keeps its own contract: it commits the edit and the move
+      // in one transaction over the text this widget was built from, so it
+      // still bases the snapshot on `self.source`.
+      const snapshot = dirtySourceSnapshot(self.source);
       clearDirtyRows();
       return { source: snapshot.source, changed: snapshot.changed, valid: true };
     }
@@ -970,25 +973,33 @@ export class EditableTableWidget extends WidgetType {
     function syncDirtyRowsToDocument(): boolean {
       const v = self.viewRef.current;
       if (!v || dirtyRows.size === 0) return false;
-      if (!currentDocumentContainsOriginalTable(v)) {
+
+      // Commit against the document, not against the copy captured at render
+      // time. While a cell is focused the widget DOM is deliberately preserved
+      // (`eq()` returns true), so `self.source` goes stale the moment the first
+      // edit lands. Every later edit then failed a source comparison that could
+      // no longer match and was dropped in silence, stranding the text in the
+      // cell until something rebuilt the table from the document.
+      const baseSource = self.liveSource(v);
+      if (baseSource === null) {
         clearDirtyRows();
         return false;
       }
 
-      const snapshot = dirtySourceSnapshot();
+      const snapshot = dirtySourceSnapshot(baseSource);
       if (!snapshot.changed) {
         clearDirtyRows();
         return false;
       }
 
       const anchorLineIdx = snapshot.firstChangedLineIdx ?? 0;
-      const anchor = lineStartOffset(sourceLines, anchorLineIdx, self.tableFrom);
+      const anchor = lineStartOffset(baseSource.split("\n"), anchorLineIdx, self.tableFrom);
       if (snapshot.firstChangedRow) restoreRowScrollPosition(anchorLineIdx, snapshot.firstChangedRow);
       clearDirtyRows();
       v.dispatch({
         changes: {
           from: self.tableFrom,
-          to: self.tableFrom + self.source.length,
+          to: self.tableFrom + baseSource.length,
           insert: snapshot.source
         },
         selection: { anchor, head: anchor }

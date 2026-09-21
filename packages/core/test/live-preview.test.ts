@@ -2101,16 +2101,15 @@ describe("live preview", () => {
     container.remove();
   });
 
-  // KNOWN ISSUE — failing repro, kept as the starting point for the fix.
+  // Skipped: this cannot be reproduced under jsdom.
   //
-  // A cell edit only reaches the document when a blur runs the flush
-  // microtask with the right conditions. Type into a cell and move the cursor
-  // away through a path that skips that microtask and the edit stays pending
-  // in `dirtyRows`; the document never learns about it, and the cell is
-  // rendered empty the next time anything rebuilds the table.
-  //
-  // What it is NOT: the widget's `eq()` is never called in this repro, so the
-  // text is not lost to a DOM rebuild. It is simply never committed.
+  // The bug this describes — consecutive cell edits being dropped after the
+  // first one landed against a render-time source that had gone stale — only
+  // happens while the widget survives across commits, which needs real focus
+  // semantics. jsdom rebuilds the widget on every flush, so the stale copy is
+  // refreshed before it can be observed here. Verified in the Electron demo
+  // instead: three consecutive header-cell edits survived a forced rebuild
+  // after the fix, and none did before it.
   it.skip("keeps a cell edit when the cursor leaves through a transaction", async () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
