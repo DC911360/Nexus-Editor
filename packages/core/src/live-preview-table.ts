@@ -612,6 +612,9 @@ export class EditableTableWidget extends WidgetType {
     const doc = view.state.doc;
     if (this.tableFrom > doc.length) return null;
     const first = doc.lineAt(this.tableFrom);
+    // Guard against a stale position: if this is no longer a table, nothing
+    // here is safe to overwrite.
+    if (!first.text.includes("|")) return null;
     let end = first.to;
     let lineNumber = first.number;
     while (lineNumber < doc.lines) {
@@ -839,7 +842,11 @@ export class EditableTableWidget extends WidgetType {
 
     this.cleanupEditingLocks = () => {
       sessionClosed = true;
-      dirtyRows.clear();
+      // Pending rows are deliberately left in place. A rebuild destroys the
+      // widget while the user may still be typing in a cell, and the blur
+      // microtask that writes that text back runs afterwards — clearing here
+      // is what dropped the last edit of a run. The commit path re-checks that
+      // the position still holds a table before it writes anything.
       releaseEditingLock("focus");
       releaseEditingLock("range");
       releaseEditingLock("drag");
