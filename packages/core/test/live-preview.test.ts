@@ -2022,6 +2022,121 @@ describe("live preview", () => {
     editor.destroy();
   });
 
+  // ── Row/column delete affordances ──
+
+  function mountTable(source: string) {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const editor = createEditor({
+      container,
+      initialValue: source,
+      livePreview: true,
+      plugins: [createGfmPreset()],
+    });
+    return { container, editor };
+  }
+
+  const headerTexts = (container: HTMLElement): string[] =>
+    Array.from(container.querySelectorAll("table tr")[1]?.querySelectorAll("th,td") ?? [])
+      .map((c) => c.textContent ?? "");
+
+  it("renders one column delete per column and one row delete per data row", () => {
+    const { container, editor } = mountTable("| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |");
+
+    expect(container.querySelectorAll(".nexus-col-delete")).toHaveLength(3);
+    // The header row gets no delete affordance — same rule as the context menu.
+    expect(container.querySelectorAll(".nexus-row-delete")).toHaveLength(2);
+
+    editor.destroy();
+    container.remove();
+  });
+
+  it("removes the column the delete button belongs to", () => {
+    const { container, editor } = mountTable("| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |");
+    expect(headerTexts(container)).toEqual(["", "A", "B", "C"]);
+
+    container.querySelectorAll<HTMLElement>(".nexus-col-delete")[1]?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+
+    expect(headerTexts(container)).toEqual(["", "A", "C"]);
+    editor.destroy();
+    container.remove();
+  });
+
+  it("removes the row the delete button belongs to", () => {
+    const { container, editor } = mountTable("| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |");
+    const rowsBefore = container.querySelectorAll("table tr").length;
+
+    container.querySelectorAll<HTMLElement>(".nexus-row-delete")[0]?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+
+    expect(container.querySelectorAll("table tr").length).toBe(rowsBefore - 1);
+    editor.destroy();
+    container.remove();
+  });
+
+  it("hides the column delete when only one column remains", () => {
+    const { container, editor } = mountTable("| A |\n| --- |\n| 1 |");
+
+    expect(container.querySelectorAll(".nexus-col-delete")).toHaveLength(0);
+
+    editor.destroy();
+    container.remove();
+  });
+
+  it("does not let the delete button select the column instead", () => {
+    // The grips own mousedown (drag) and click (select); the delete button has
+    // to stop both, or pressing it would highlight the column instead.
+    const { container, editor } = mountTable("| A | B |\n| --- | --- |\n| 1 | 2 |");
+    const grip = container.querySelectorAll<HTMLElement>(".nexus-col-grip")[0];
+    const button = container.querySelector<HTMLElement>(".nexus-col-delete");
+
+    button?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    button?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(grip.style.background).toBe("");
+    editor.destroy();
+    container.remove();
+  });
+
+  it("auto-fit drops a manual column width", () => {
+    // Unique header text: `tableColumnWidths` is a module-level map keyed by
+    // the header line, and an earlier resize test leaves widths under
+    // `| A | B |`. Reusing that header would pre-seed a colgroup here.
+    const { container, editor } = mountTable("| Fit A | Fit B |\n| --- | --- |\n| 1 | 2 |");
+    const table = container.querySelector<HTMLTableElement>("table");
+    expect(table).not.toBeNull();
+
+    // Stand in for a completed resize drag.
+    table!.style.tableLayout = "fixed";
+    table!.style.width = "600px";
+    const colgroup = document.createElement("colgroup");
+    colgroup.innerHTML = "<col style='width:300px'><col style='width:300px'><col style='width:300px'>";
+    table!.insertBefore(colgroup, table!.firstChild);
+
+    const cell = container.querySelectorAll("tr")[2]?.querySelector(".nexus-cell");
+    cell?.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 })
+    );
+    const menu = document.body.querySelector<HTMLElement>(".nexus-table-ctx");
+    const fit = Array.from(menu?.querySelectorAll<HTMLElement>("button[role='menuitem']") ?? [])
+      .find((b) => /Auto-fit/.test(b.textContent ?? ""));
+    expect(fit).toBeTruthy();
+
+    fit?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    const after = container.querySelector<HTMLTableElement>("table");
+    expect(after?.style.tableLayout).toBe("");
+    expect(after?.style.width).toBe("");
+    expect(after?.querySelector("colgroup")).toBeNull();
+
+    menu?.remove();
+    editor.destroy();
+    container.remove();
+  });
+
   it("renders a styled localized table context menu", () => {
     const container = document.createElement("div");
     const editor = createEditor({
@@ -2032,7 +2147,8 @@ describe("live preview", () => {
         deleteRow: "删除行",
         deleteColumn: "删除列",
         insertRowBelow: "在下方插入行",
-        insertColumnAfter: "在右侧插入列"
+        insertColumnAfter: "在右侧插入列",
+        autoFitWidth: "自适应宽度"
       },
       plugins: [createGfmPreset()]
     });
@@ -2055,7 +2171,8 @@ describe("live preview", () => {
     expect(menu?.style.color).toContain("--nexus-menu-text");
     expect(menu?.textContent).toContain("删除行");
     expect(menu?.textContent).toContain("在右侧插入列");
-    expect(menu?.querySelectorAll("button[role='menuitem']")).toHaveLength(4);
+    expect(menu?.textContent).toContain("自适应宽度");
+    expect(menu?.querySelectorAll("button[role='menuitem']")).toHaveLength(5);
 
     menu?.remove();
     editor.destroy();

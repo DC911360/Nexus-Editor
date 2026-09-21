@@ -564,6 +564,13 @@ export class EditableTableWidget extends WidgetType {
   private editing = false;
   private reusable = true;
   private cleanupEditingLocks: (() => void) | null = null;
+  /**
+   * Set during render, where the mounted `<table>` and its width key are in
+   * scope. Undoing a manual resize is an in-place DOM edit rather than a
+   * dispatch: the source is unchanged, so a transaction would be swallowed by
+   * `eq()` and the colgroup would survive.
+   */
+  private autoFit: (() => void) | null = null;
 
   constructor(
     private node: Table,
@@ -1502,6 +1509,34 @@ export class EditableTableWidget extends WidgetType {
       return pill;
     }
 
+    /**
+     * Trash glyph for the row/column delete buttons. Drawn rather than typed as
+     * "×": a cross reads as "dismiss", which is the wrong promise for a control
+     * that rewrites the table.
+     */
+    function createTrashIcon(): SVGElement {
+      const NS = "http://www.w3.org/2000/svg";
+      const icon = document.createElementNS(NS, "svg");
+      icon.setAttribute("viewBox", "0 0 12 12");
+      icon.setAttribute("width", "10");
+      icon.setAttribute("height", "10");
+      icon.setAttribute("fill", "none");
+      icon.setAttribute("stroke", "currentColor");
+      icon.setAttribute("stroke-width", "1.3");
+      icon.setAttribute("stroke-linecap", "round");
+      icon.setAttribute("stroke-linejoin", "round");
+      for (const d of [
+        "M2.6 3.4h6.8",
+        "M4.9 3.4V2.6a.6.6 0 0 1 .6-.6h1a.6.6 0 0 1 .6.6v.8",
+        "M3.5 3.4l.4 6.1a.8.8 0 0 0 .8.7h2.6a.8.8 0 0 0 .8-.7l.4-6.1",
+      ]) {
+        const path = document.createElementNS(NS, "path");
+        path.setAttribute("d", d);
+        icon.appendChild(path);
+      }
+      return icon;
+    }
+
     // ── Custom drag handlers (mousedown/mousemove/mouseup, no HTML5 drag) ──
 
     // Get the content area boundaries (excluding grip column)
@@ -1639,6 +1674,14 @@ export class EditableTableWidget extends WidgetType {
     const gripRow = document.createElement("tr");
     gripRow.style.cssText = "opacity:0;transition:opacity .15s;";
 
+    // Delete affordances float above their grip rather than living in the cell
+    // flow: an in-flow button would grow the grip row and shift the table every
+    // time it appeared.
+    const deleteBtnCss =
+      "position:absolute;top:-19px;width:16px;height:16px;padding:0;border:1px solid var(--nexus-border-subtle);" +
+      "border-radius:4px;background:var(--nexus-bg);color:var(--nexus-text-muted);font-size:12px;line-height:1;" +
+      "display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:2;";
+
     const gripSpacer = document.createElement("td");
     gripSpacer.style.cssText = "width:16px;min-width:16px;padding:0;border:none;";
     gripRow.appendChild(gripSpacer);
@@ -1667,6 +1710,32 @@ export class EditableTableWidget extends WidgetType {
         highlightColumn(colIdx);
         wrapper.focus({ preventScroll: true });
       });
+
+      // Mirrors the context menu's guard: a table with no columns is not a
+      // table, so the last one keeps its delete affordance hidden.
+      if (colCount > 1) {
+        gripCell.style.position = "relative";
+        const deleteCol = document.createElement("button");
+        deleteCol.type = "button";
+        deleteCol.className = "nexus-col-delete";
+        deleteCol.appendChild(createTrashIcon());
+        deleteCol.title = self.labels.deleteColumn;
+        deleteCol.setAttribute("aria-label", self.labels.deleteColumn);
+        deleteCol.style.cssText = deleteBtnCss + "right:2px;";
+        // The grip already owns mousedown (column drag) and click (column
+        // select). Without stopping both, pressing delete would drag or
+        // highlight the column instead of removing it.
+        deleteCol.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+        deleteCol.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          self.deleteColumn(colIdx);
+        });
+        gripCell.appendChild(deleteCol);
+      }
 
       gripRow.appendChild(gripCell);
     }
@@ -1803,6 +1872,27 @@ export class EditableTableWidget extends WidgetType {
 
         rowGrip.addEventListener("mouseenter", () => { if (draggingRow < 0) rowPill.style.background = GRIP_BG_HOVER; });
         rowGrip.addEventListener("mouseleave", () => { if (draggingRow < 0) rowPill.style.background = GRIP_BG; });
+
+        rowGrip.style.position = "relative";
+        const deleteRow = document.createElement("button");
+        deleteRow.type = "button";
+        deleteRow.className = "nexus-row-delete";
+        deleteRow.appendChild(createTrashIcon());
+        deleteRow.title = self.labels.deleteRow;
+        deleteRow.setAttribute("aria-label", self.labels.deleteRow);
+        deleteRow.style.cssText = deleteBtnCss + "left:0;";
+        // Same reason as the column button: the grip owns mousedown (row drag)
+        // and click (row select), so the press must not travel any further.
+        deleteRow.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+        deleteRow.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          self.deleteRow(curRowIdx);
+        });
+        rowGrip.appendChild(deleteRow);
 
         rowGrip.addEventListener("mousedown", (e) => {
           e.preventDefault();
@@ -2293,6 +2383,15 @@ export class EditableTableWidget extends WidgetType {
       applyColumnWidths(savedWidths);
     }
 
+    self.autoFit = () => {
+      tableColumnWidths.delete(widthKey);
+      // `colgroup` can only ever be a direct child of `table`, so this is the
+      // same node `:scope > colgroup` matches without relying on the selector.
+      table.querySelector("colgroup")?.remove();
+      table.style.tableLayout = "";
+      table.style.width = "";
+    };
+
     // ── "+" buttons ──
     const btnCss = "position:absolute;width:20px;height:20px;border:1px solid var(--nexus-border-subtle);" +
       "border-radius:50%;background:var(--nexus-bg);cursor:pointer;font-size:14px;line-height:1;" +
@@ -2505,6 +2604,9 @@ function showContextMenu(
   addItem(labels.deleteColumn, () => (widget as any).deleteColumn(colIdx), colCount <= 1);
   addItem(labels.insertRowBelow, () => (widget as any).addRow());
   addItem(labels.insertColumnAfter, () => (widget as any).addColumn());
+  // Undo a manual resize. The work lives on the widget because only the render
+  // closure holds the mounted `<table>` and its width key.
+  addItem(labels.autoFitWidth, () => (widget as any).autoFit?.());
 
   mountTarget.appendChild(menu);
 
