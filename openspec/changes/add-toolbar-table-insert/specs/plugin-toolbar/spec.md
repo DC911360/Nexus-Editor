@@ -6,7 +6,7 @@
 
 #### Scenario: Inserting a three-by-three table
 - **WHEN** `insertTable` is called with `rows = 3` and `cols = 3` on an empty document
-- **THEN** the document SHALL be `|   |   |   |\n|---|---|---|\n|   |   |   |\n|   |   |   |`
+- **THEN** the document SHALL be `|   |   |   |\n|---|---|---|\n|   |   |   |\n|   |   |   |\n`
 - **AND** the table SHALL have one header row and two body rows
 
 #### Scenario: Non-finite input is rejected
@@ -19,7 +19,7 @@ The `rows` argument SHALL include the header row, so the inserted shape matches 
 
 #### Scenario: A two-by-two pick yields one body row
 - **WHEN** `insertTable` is called with `rows = 2` and `cols = 2`
-- **THEN** the document SHALL be `|   |   |\n|---|---|\n|   |   |`
+- **THEN** the document SHALL be `|   |   |\n|---|---|\n|   |   |\n`
 - **AND** the table SHALL have exactly one body row
 
 #### Scenario: A single row is clamped
@@ -38,17 +38,28 @@ The whole table SHALL be written in a single transaction so that one undo restor
 
 ### Requirement: The Table Is Separated From Surrounding Text
 
-When the insertion point is not already at a line boundary, `plugin-toolbar` SHALL insert a newline before the table and a newline after it, so the table is parsed as its own block and does not merge with adjacent text.
+When the insertion point is not already at a line boundary, `plugin-toolbar` SHALL insert a newline before the table, so it is parsed as its own block and does not merge with the preceding text. The inserted block SHALL always end with a newline.
 
-#### Scenario: Inserting mid-line adds separators
+#### Scenario: Inserting mid-line adds a leading separator
 - **WHEN** the document is `abc` with the caret at the end
 - **AND** `insertTable` is called with `rows = 2` and `cols = 2`
-- **THEN** the document SHALL be `abc\n|   |   |\n|---|---|\n|   |   |`
+- **THEN** the document SHALL be `abc\n|   |   |\n|---|---|\n|   |   |\n`
 
 #### Scenario: Inserting on an empty line adds no leading separator
 - **WHEN** the document is empty
 - **AND** `insertTable` is called
 - **THEN** the document SHALL begin with `|`, not with a newline
+- **AND** the document SHALL end with a newline
+
+### Requirement: The Caret Lands On A Line Past The Table
+
+The table renders as an atomic range, and the position pressed against its trailing edge is not one CM6 will hold a caret at — a caret sent there is rewritten to the document start, which leaves `Backspace` and `Delete` with nothing adjacent to act on and makes the table look impossible to remove. `plugin-toolbar` SHALL therefore end the inserted block with a newline and place the caret at the end of the block, so the caret rests on a line past the table.
+
+#### Scenario: The caret can delete the table immediately
+- **WHEN** `insertTable` is called
+- **THEN** the caret SHALL be at the end of the document
+- **AND** the document SHALL end with a newline, so the caret sits on a line past the table
+- **AND** a single backward delete SHALL remove the table
 
 ### Requirement: The Size Picker Reports The Size Before Inserting
 

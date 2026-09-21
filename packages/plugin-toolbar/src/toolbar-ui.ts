@@ -269,8 +269,8 @@ const DROPDOWN_ITEM_STYLES = `
   line-height: 1.5;
 `;
 
-const TABLE_GRID_ROWS = 6;
-const TABLE_GRID_COLS = 6;
+const TABLE_GRID_ROWS = 10;
+const TABLE_GRID_COLS = 10;
 
 /**
  * Table size picker: hover to grow the highlight, click to insert. Mirrors the

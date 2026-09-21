@@ -159,7 +159,7 @@ describe("insertTable", () => {
 
     insertTable(editor, 3, 3);
 
-    expect(editor.getDocument()).toBe("|   |   |   |\n|---|---|---|\n|   |   |   |\n|   |   |   |");
+    expect(editor.getDocument()).toBe("|   |   |   |\n|---|---|---|\n|   |   |   |\n|   |   |   |\n");
     editor.destroy();
   });
 
@@ -169,7 +169,7 @@ describe("insertTable", () => {
 
     insertTable(editor, 2, 2);
 
-    expect(editor.getDocument()).toBe("|   |   |\n|---|---|\n|   |   |");
+    expect(editor.getDocument()).toBe("|   |   |\n|---|---|\n|   |   |\n");
     editor.destroy();
   });
 
@@ -190,6 +190,34 @@ describe("insertTable", () => {
     editor.destroy();
   });
 
+  it("ends the block with a newline so the caret has a line past the table", () => {
+    // The caret cannot rest against the table's trailing edge — CM6 rewrites it
+    // to the document start, which makes the table impossible to delete. The
+    // trailing newline is what gives the caret somewhere valid to land.
+    const container = document.createElement("div");
+    const editor = createEditor({ container, initialValue: "" });
+
+    insertTable(editor, 2, 2);
+
+    expect(editor.getDocument().endsWith("\n")).toBe(true);
+    editor.destroy();
+  });
+
+  it("leaves the caret after the block, never inside the table source", () => {
+    const container = document.createElement("div");
+    const editor = createEditor({ container, initialValue: "abc" });
+
+    editor.setSelection(3, 3);
+    insertTable(editor, 2, 2);
+
+    // The table renders as an atomic range, so a caret parked inside its
+    // source cannot be acted on — Backspace and Delete both no-op and the
+    // table becomes impossible to remove. The caret must sit past the block.
+    const doc = editor.getDocument();
+    expect(editor.getSelection().anchor).toBe(doc.length);
+    editor.destroy();
+  });
+
   it("separates the table from surrounding text with newlines", () => {
     const container = document.createElement("div");
     const editor = createEditor({ container, initialValue: "abc" });
@@ -197,7 +225,7 @@ describe("insertTable", () => {
     editor.setSelection(3, 3);
     insertTable(editor, 2, 2);
 
-    expect(editor.getDocument()).toBe("abc\n|   |   |\n|---|---|\n|   |   |");
+    expect(editor.getDocument()).toBe("abc\n|   |   |\n|---|---|\n|   |   |\n");
     editor.destroy();
   });
 });
