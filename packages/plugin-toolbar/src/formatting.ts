@@ -222,25 +222,20 @@ export function insertTable(editor: EditorAPI, rows: number, cols: number): bool
 
   const needsLeadingNewline = from > 0 && doc[from - 1] !== "\n";
 
-  // Separate the table from text that follows it, but do not append a newline
-  // when the table ends the document: the widget's replacement range swallows
-  // the empty line after it, so the caret can never be put back there and
-  // anything typed on that line renders as another table row.
-  const needsTrailingNewline = to < doc.length && doc[to] !== "\n";
-  const block =
-    (needsLeadingNewline ? "\n" : "") +
-    lines.join("\n") +
-    (needsTrailingNewline ? "\n" : "");
+  // The block always ends with a newline, so there is a line to write on
+  // below the table even when it lands at the end of the document.
+  const block = (needsLeadingNewline ? "\n" : "") + lines.join("\n") + "\n";
 
   // The picker is a dropdown mounted on `document.body`, so the editor is
   // blurred by the time this runs — take focus back, or the caret never reaches
   // the DOM. One transaction, so a single undo removes the whole table.
   //
-  // The caret goes just *before* the table. The position against its trailing
-  // edge is not one CM6 will hold a caret at — one sent there is rewritten to
-  // the document start, which made the table look impossible to delete.
+  // The caret goes on the line below the table. The position pressed against
+  // the table's trailing edge is not one CM6 holds a caret at — one sent there
+  // is rewritten to the document start, which made the table look impossible to
+  // delete — so it goes one past the newline instead.
   editor.focus();
-  editor.replaceRange(from, to, block, { anchor: from });
+  editor.replaceRange(from, to, block, { anchor: from + block.length });
   return true;
 }
 

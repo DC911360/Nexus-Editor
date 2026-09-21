@@ -159,7 +159,7 @@ describe("insertTable", () => {
 
     insertTable(editor, 3, 3);
 
-    expect(editor.getDocument()).toBe("|   |   |   |\n|---|---|---|\n|   |   |   |\n|   |   |   |");
+    expect(editor.getDocument()).toBe("|   |   |   |\n|---|---|---|\n|   |   |   |\n|   |   |   |\n");
     editor.destroy();
   });
 
@@ -169,7 +169,7 @@ describe("insertTable", () => {
 
     insertTable(editor, 2, 2);
 
-    expect(editor.getDocument()).toBe("|   |   |\n|---|---|\n|   |   |");
+    expect(editor.getDocument()).toBe("|   |   |\n|---|---|\n|   |   |\n");
     editor.destroy();
   });
 
@@ -190,7 +190,7 @@ describe("insertTable", () => {
     editor.destroy();
   });
 
-  it("leaves the caret just before the table, never inside its source", () => {
+  it("leaves the caret on the line below the table", () => {
     const container = document.createElement("div");
     const editor = createEditor({ container, initialValue: "abc" });
 
@@ -201,7 +201,7 @@ describe("insertTable", () => {
     // rewrites a caret sent to that edge back to the document start, which
     // left the table looking impossible to remove. The position before the
     // table is one it holds.
-    expect(editor.getSelection()).toEqual({ anchor: 3, head: 3 });
+    expect(editor.getSelection()).toEqual({ anchor: 34, head: 34 });
     editor.destroy();
   });
 
@@ -212,7 +212,7 @@ describe("insertTable", () => {
     editor.setSelection(3, 3);
     insertTable(editor, 2, 2);
 
-    expect(editor.getDocument()).toBe("abc\n|   |   |\n|---|---|\n|   |   |");
+    expect(editor.getDocument()).toBe("abc\n|   |   |\n|---|---|\n|   |   |\n");
     editor.destroy();
   });
 });
