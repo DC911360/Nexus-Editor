@@ -2101,6 +2101,44 @@ describe("live preview", () => {
     container.remove();
   });
 
+  // KNOWN ISSUE — failing repro, kept as the starting point for the fix.
+  //
+  // A cell edit only reaches the document when a blur runs the flush
+  // microtask with the right conditions. Type into a cell and move the cursor
+  // away through a path that skips that microtask and the edit stays pending
+  // in `dirtyRows`; the document never learns about it, and the cell is
+  // rendered empty the next time anything rebuilds the table.
+  //
+  // What it is NOT: the widget's `eq()` is never called in this repro, so the
+  // text is not lost to a DOM rebuild. It is simply never committed.
+  it.skip("keeps a cell edit when the cursor leaves through a transaction", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const editor = createEditor({
+      container,
+      initialValue: "|   |   |   |\n| --- | --- | --- |\n| a | b |   |",
+      livePreview: true,
+      plugins: [createGfmPreset()],
+    });
+
+    const headerCells = Array.from(
+      container.querySelectorAll<HTMLElement>("table tr")[1]?.querySelectorAll<HTMLElement>(".nexus-cell") ?? []
+    );
+    const target = headerCells[2];
+    activateTableCell(target);
+    target.textContent = "3";
+    target.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "3" }));
+    // A transaction that rebuilds the widget while the edit is still only in
+    // the cell DOM — no blur, so nothing flushed it.
+    editor.setSelection(0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(editor.getDocument()).toContain("3");
+    editor.destroy();
+    container.remove();
+  });
+
   it("deletes the column after a cell was edited", () => {
     // Regression: a focused cell keeps its text in the DOM, so a structural
     // edit written underneath it was discarded the moment the cell next synced
