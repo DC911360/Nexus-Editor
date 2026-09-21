@@ -2101,6 +2101,32 @@ describe("live preview", () => {
     container.remove();
   });
 
+  it("deletes the column after a cell was edited", () => {
+    // Regression: a focused cell keeps its text in the DOM, so a structural
+    // edit written underneath it was discarded the moment the cell next synced
+    // — the delete landed, then silently vanished.
+    const { container, editor } = mountTable("| A | B |\n| --- | --- |\n| 1 | 2 |");
+    // `.nexus-cell` runs header-first in DOM order; index 2 is the first data
+    // cell, so the edit and the delete touch different cells.
+    const cell = container.querySelectorAll<HTMLElement>(".nexus-cell")[2];
+    activateTableCell(cell);
+    cell.textContent = "edited";
+    cell.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: "edited" }));
+
+    container.querySelectorAll<HTMLElement>(".nexus-col-delete")[1]?.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 })
+    );
+    container.querySelectorAll<HTMLElement>(".nexus-col-delete")[1]?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+
+    // The column goes, and the edit made before the click is kept.
+    expect(editor.getDocument()).toBe("| A |\n| --- |\n| edited |");
+
+    editor.destroy();
+    container.remove();
+  });
+
   it("auto-fit drops a manual column width", () => {
     // Unique header text: `tableColumnWidths` is a module-level map keyed by
     // the header line, and an earlier resize test leaves widths under

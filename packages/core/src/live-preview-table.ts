@@ -599,6 +599,64 @@ export class EditableTableWidget extends WidgetType {
     return estimateTableHeight(this.source);
   }
 
+  /**
+   * The table's text as it currently stands in the document.
+   *
+   * In-cell editing writes straight into the document, and `eq()` deliberately
+   * keeps the widget alive while a cell is being edited — so `this.source` can
+   * lag behind the real text. Every structural edit has to start from the
+   * document; reading the render-time copy instead produces a source that no
+   * longer matches, and `dispatch` drops it without a word.
+   */
+  private liveSource(view: EditorView): string | null {
+    const doc = view.state.doc;
+    if (this.tableFrom > doc.length) return null;
+    const first = doc.lineAt(this.tableFrom);
+    let end = first.to;
+    let lineNumber = first.number;
+    while (lineNumber < doc.lines) {
+      const next = doc.line(lineNumber + 1);
+      if (!next.text.trimStart().startsWith("|")) break;
+      end = next.to;
+      lineNumber += 1;
+    }
+    return doc.sliceString(this.tableFrom, end);
+  }
+
+  /**
+   * Applies a line-level edit to the table's live text in one transaction.
+   * A `null` from the transform means the table no longer has that shape.
+   */
+  private mutateTable(transform: (lines: string[]) => string[] | null): boolean {
+    const view = this.viewRef.current;
+    if (!view) return false;
+    // Commit in-cell typing first. While a cell is focused its text lives in
+    // the cell's DOM, and a structural edit written underneath it is discarded
+    // the moment that cell next syncs — the delete lands, then vanishes.
+    flushPendingTableEdits(view, true);
+    const source = this.liveSource(view);
+    if (source === null) return false;
+    const next = transform(source.split("\n"));
+    if (!next) return false;
+    const insert = next.join("\n");
+    if (insert === source) return false;
+    view.dispatch({
+      changes: { from: this.tableFrom, to: this.tableFrom + source.length, insert },
+    });
+    return true;
+  }
+
+  /**
+   * Writes `newSource` over the table range, provided the document still holds
+   * the text this widget was built from.
+   *
+   * The drag path relies on that: it captures a source that includes a cell
+   * edit which has *not* been written to the document yet, so the widget's
+   * copy is still current and the single transaction commits the cell text and
+   * the structural move together. Callers whose edit already landed in the
+   * document must go through `mutateTable` instead, which starts from the live
+   * text.
+   */
   private dispatch(newSource: string): void {
     const v = this.viewRef.current;
     if (!v) return;
@@ -606,65 +664,78 @@ export class EditableTableWidget extends WidgetType {
     if (tableEnd > v.state.doc.length || v.state.doc.sliceString(this.tableFrom, tableEnd) !== this.source) {
       return;
     }
-    v.dispatch({ changes: { from: this.tableFrom, to: this.tableFrom + this.source.length, insert: newSource } });
+    v.dispatch({ changes: { from: this.tableFrom, to: tableEnd, insert: newSource } });
   }
 
   private deleteColumn(colIdx: number): void {
-    const lines = this.source.split("\n");
-    const newLines = lines.map((line) => {
-      const cells = line.split("|").filter((_, i, a) => i > 0 && i < a.length - 1);
-      if (cells.length === 0) return line;
-      cells.splice(colIdx, 1);
-      return "|" + cells.join("|") + "|";
-    });
-    this.dispatch(newLines.join("\n"));
+    this.mutateTable((lines) =>
+      lines.map((line) => {
+        const cells = line.split("|").filter((_, i, a) => i > 0 && i < a.length - 1);
+        if (cells.length === 0) return line;
+        cells.splice(colIdx, 1);
+        return "|" + cells.join("|") + "|";
+      })
+    );
   }
 
   private deleteRow(rowIdx: number): void {
-    const lines = this.source.split("\n");
-    const dataLines: number[] = [];
-    for (let i = 0; i < lines.length; i++) if (!SEPARATOR_RE.test(lines[i])) dataLines.push(i);
-    const lineIdx = dataLines[rowIdx];
-    if (lineIdx === undefined) return;
-    lines.splice(lineIdx, 1);
-    this.dispatch(lines.join("\n"));
+    this.mutateTable((lines) => {
+      const dataLines: number[] = [];
+      for (let i = 0; i < lines.length; i++) if (!SEPARATOR_RE.test(lines[i])) dataLines.push(i);
+      const lineIdx = dataLines[rowIdx];
+      if (lineIdx === undefined) return null;
+      lines.splice(lineIdx, 1);
+      return lines;
+    });
   }
 
   private addColumn(): void {
-    const lines = this.source.split("\n");
-    const nl = lines.map((l) => SEPARATOR_RE.test(l) ? l.replace(/\|?\s*$/, " | --- |") : l.replace(/\|?\s*$/, " |  |"));
-    this.dispatch(nl.join("\n"));
+    this.mutateTable((lines) =>
+      lines.map((l) => SEPARATOR_RE.test(l) ? l.replace(/\|?\s*$/, " | --- |") : l.replace(/\|?\s*$/, " |  |"))
+    );
   }
 
   private addRow(): void {
     const cc = (this.node.children?.[0] as any)?.children?.length ?? 2;
-    const nr = "\n| " + Array(cc).fill("  ").join(" | ") + " |";
-    const v = this.viewRef.current;
-    if (!v) return;
-    v.dispatch({ changes: { from: this.tableFrom + this.source.length, insert: nr } });
+    this.mutateTable((lines) => [...lines, "| " + Array(cc).fill("  ").join(" | ") + " |"]);
   }
 
-  private moveColumn(from: number, to: number, source = this.source): void {
-    const lines = source.split("\n");
-    const nl = lines.map((line) => {
-      const p = line.split("|"), cells = p.slice(1, -1);
-      if (from >= cells.length || to >= cells.length) return line;
-      const [m] = cells.splice(from, 1);
-      cells.splice(to, 0, m);
-      return "|" + cells.join("|") + "|";
-    });
-    this.dispatch(nl.join("\n"));
+  private moveColumn(from: number, to: number, source?: string): void {
+    const transform = (lines: string[]): string[] =>
+      lines.map((line) => {
+        const p = line.split("|"), cells = p.slice(1, -1);
+        if (from >= cells.length || to >= cells.length) return line;
+        const [m] = cells.splice(from, 1);
+        cells.splice(to, 0, m);
+        return "|" + cells.join("|") + "|";
+      });
+
+    // A drag passes the source it started from so the reorder lands on the text
+    // it measured; anything else edits whatever the document now holds.
+    if (source === undefined) {
+      this.mutateTable(transform);
+      return;
+    }
+    this.dispatch(transform(source.split("\n")).join("\n"));
   }
 
-  private moveRow(from: number, to: number, source = this.source): void {
-    const lines = source.split("\n");
-    const dl: number[] = [];
-    for (let i = 0; i < lines.length; i++) if (!SEPARATOR_RE.test(lines[i])) dl.push(i);
-    const s = dl[from], d = dl[to];
-    if (s === undefined || d === undefined) return;
-    const [m] = lines.splice(s, 1);
-    lines.splice(d, 0, m);
-    this.dispatch(lines.join("\n"));
+  private moveRow(from: number, to: number, source?: string): void {
+    const transform = (lines: string[]): string[] | null => {
+      const dl: number[] = [];
+      for (let i = 0; i < lines.length; i++) if (!SEPARATOR_RE.test(lines[i])) dl.push(i);
+      const s = dl[from], d = dl[to];
+      if (s === undefined || d === undefined) return null;
+      const [m] = lines.splice(s, 1);
+      lines.splice(d, 0, m);
+      return lines;
+    };
+
+    if (source === undefined) {
+      this.mutateTable(transform);
+      return;
+    }
+    const next = transform(source.split("\n"));
+    if (next) this.dispatch(next.join("\n"));
   }
 
   toDOM(): HTMLElement {
