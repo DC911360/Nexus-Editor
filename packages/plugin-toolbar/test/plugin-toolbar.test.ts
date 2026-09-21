@@ -6,7 +6,9 @@ import {
   toggleBold,
   toggleItalic,
   toggleInlineCode,
+  insertEmoji,
   insertLink,
+  insertTable,
   toggleHeading,
   toggleOrderedList,
   toggleUnorderedList,
@@ -84,6 +86,118 @@ describe("insertLink", () => {
     insertLink(editor);
 
     expect(editor.getDocument()).toBe("text [link text](url)");
+    editor.destroy();
+  });
+});
+
+describe("insertEmoji", () => {
+  it("inserts at the caret", () => {
+    const container = document.createElement("div");
+    const editor = createEditor({ container, initialValue: "hi " });
+
+    editor.setSelection(3, 3);
+    insertEmoji(editor, "\u{1F44D}");
+
+    expect(editor.getDocument()).toBe("hi \u{1F44D}");
+    editor.destroy();
+  });
+
+  it("replaces the selection", () => {
+    const container = document.createElement("div");
+    const editor = createEditor({ container, initialValue: "hello" });
+
+    editor.setSelection(0, 5);
+    insertEmoji(editor, "\u{1F600}");
+
+    expect(editor.getDocument()).toBe("\u{1F600}");
+    editor.destroy();
+  });
+
+  it("rejects an empty emoji", () => {
+    const container = document.createElement("div");
+    const editor = createEditor({ container, initialValue: "hello" });
+
+    expect(insertEmoji(editor, "")).toBe(false);
+    expect(editor.getDocument()).toBe("hello");
+    editor.destroy();
+  });
+});
+
+describe("emoji picker", () => {
+  it("renders every category and inserts on click", () => {
+    const container = document.createElement("div");
+    const editor = createEditor({ container, initialValue: "hi " });
+    const toolbar = createToolbarUI(editor);
+    document.body.appendChild(toolbar.element);
+    editor.setSelection(3, 3);
+
+    const button = toolbar.element.querySelector<HTMLButtonElement>('[data-toolbar-action="emoji"]');
+    expect(button).not.toBeNull();
+    button?.click();
+
+    const picker = document.querySelector(".nexus-toolbar-emoji-picker");
+    expect(picker).not.toBeNull();
+
+    const first = picker?.querySelector<HTMLButtonElement>(".nexus-toolbar-emoji");
+    expect(first).not.toBeNull();
+    const chosen = first?.textContent ?? "";
+
+    first?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    expect(editor.getDocument()).toBe(`hi ${chosen}`);
+    expect(document.querySelector(".nexus-toolbar-emoji-picker")).toBeNull();
+
+    toolbar.destroy();
+    editor.destroy();
+  });
+});
+
+describe("insertTable", () => {
+  it("inserts a GFM table with a header row plus the picked body rows", () => {
+    const container = document.createElement("div");
+    const editor = createEditor({ container, initialValue: "" });
+
+    insertTable(editor, 3, 3);
+
+    expect(editor.getDocument()).toBe("|   |   |   |\n|---|---|---|\n|   |   |   |\n|   |   |   |");
+    editor.destroy();
+  });
+
+  it("counts the header as the first picked row", () => {
+    const container = document.createElement("div");
+    const editor = createEditor({ container, initialValue: "" });
+
+    insertTable(editor, 2, 2);
+
+    expect(editor.getDocument()).toBe("|   |   |\n|---|---|\n|   |   |");
+    editor.destroy();
+  });
+
+  it("replaces the selection and stays one undo entry", () => {
+    const container = document.createElement("div");
+    const editor = createEditor({
+      container,
+      initialValue: "hello",
+      plugins: [createHistoryPlugin()],
+    });
+
+    editor.setSelection(0, 5);
+    insertTable(editor, 2, 2);
+    expect(editor.getDocument()).toContain("|---|---|");
+
+    editor.undo();
+    expect(editor.getDocument()).toBe("hello");
+    editor.destroy();
+  });
+
+  it("separates the table from surrounding text with newlines", () => {
+    const container = document.createElement("div");
+    const editor = createEditor({ container, initialValue: "abc" });
+
+    editor.setSelection(3, 3);
+    insertTable(editor, 2, 2);
+
+    expect(editor.getDocument()).toBe("abc\n|   |   |\n|---|---|\n|   |   |");
     editor.destroy();
   });
 });

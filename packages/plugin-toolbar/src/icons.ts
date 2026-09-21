@@ -184,3 +184,22 @@ export function iconHorizontalRule(): HTMLElement {
     `<line x1="2" y1="9" x2="16" y2="9"/>`
   );
 }
+
+export function iconTable(): HTMLElement {
+  return svgIcon(
+    `<rect x="2" y="3" width="14" height="12" rx="2"/>` +
+    `<line x1="2" y1="7" x2="16" y2="7"/>` +
+    `<line x1="7" y1="7" x2="7" y2="15"/>` +
+    `<line x1="11.5" y1="7" x2="11.5" y2="15"/>` +
+    `<line x1="2" y1="11" x2="16" y2="11"/>`
+  );
+}
+
+export function iconEmoji(): HTMLElement {
+  return svgIcon(
+    `<circle cx="9" cy="9" r="6.5"/>` +
+    `<circle cx="6.8" cy="7.4" r="0.5" fill="currentColor" stroke="none"/>` +
+    `<circle cx="11.2" cy="7.4" r="0.5" fill="currentColor" stroke="none"/>` +
+    `<path d="M6.3 10.6a3.3 3.3 0 0 0 5.4 0"/>`
+  );
+}
